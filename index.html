@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XAUT/USDT Perpetual — Live Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root{
+    --bg:#0A0E14;
+    --panel:#0F1620;
+    --panel-2:#141C28;
+    --border:#1E2733;
+    --text:#E6EDF3;
+    --muted:#6B7785;
+    --buy:#00D9A3;
+    --sell:#FF5C5C;
+    --strong:#7C8CFF;
+    --weak:#FFB020;
+    --accent:#00D9A3;
+    --breakout:#B084FF;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Inter',sans-serif;
+    height:100vh;
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+  }
+  .mono{font-family:'JetBrains Mono',monospace;}
+
+  /* ===== TOP BAR ===== */
+  header{
+    display:flex;
+    align-items:center;
+    gap:28px;
+    padding:12px 20px;
+    background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border-bottom:1px solid var(--border);
+    flex-shrink:0;
+    flex-wrap:wrap;
+  }
+  .symbol-block{display:flex;flex-direction:column;gap:2px;}
+  .symbol-block .pair{font-size:15px;font-weight:800;letter-spacing:0.5px;}
+  .symbol-block .sub{font-size:11px;color:var(--muted);}
+  .price-block{display:flex;align-items:baseline;gap:10px;}
+  #livePrice{font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:700;transition:color .15s;}
+  #priceChange{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;padding:3px 8px;border-radius:5px;}
+  .stat{display:flex;flex-direction:column;gap:1px;}
+  .stat .lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:0.6px;}
+  .stat .val{font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:600;}
+  .stat.high .val{color:var(--buy);}
+  .stat.low .val{color:var(--sell);}
+
+  .status{display:flex;align-items:center;gap:6px;margin-left:auto;font-size:11px;color:var(--muted);}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--sell);box-shadow:0 0 8px var(--sell);}
+  .dot.live{background:var(--buy);box-shadow:0 0 8px var(--buy);}
+
+  .intervals{display:flex;gap:4px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:3px;flex-wrap:wrap;}
+  .intervals button{
+    background:transparent;border:none;color:var(--muted);
+    font-family:'JetBrains Mono',monospace;font-size:11px;font-weight:600;
+    padding:6px 10px;border-radius:6px;cursor:pointer;transition:.15s;
+  }
+  .intervals button.active{background:var(--accent);color:#04140F;}
+  .intervals button:hover:not(.active){color:var(--text);}
+
+  /* ===== MAIN LAYOUT ===== */
+  .main{flex:1;display:flex;overflow:hidden;min-height:0;}
+  .chart-wrap{flex:1;position:relative;min-width:0;min-height:0;}
+  #chart{width:100%;height:100%;}
+  #wallCanvas{position:absolute;top:0;right:0;height:100%;width:64px;pointer-events:none;}
+  .chart-legend{
+    position:absolute;top:8px;left:8px;z-index:5;display:flex;gap:10px;flex-wrap:wrap;
+    background:rgba(15,22,32,0.82);border:1px solid var(--border);border-radius:8px;
+    padding:6px 10px;pointer-events:none;backdrop-filter:blur(2px);
+  }
+  .chart-legend span{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--muted);font-family:'JetBrains Mono',monospace;white-space:nowrap;}
+  .chart-legend i{width:8px;height:8px;border-radius:2px;display:inline-block;flex-shrink:0;}
+
+  /* ===== SIDEBAR ===== */
+  aside{
+    width:290px;flex-shrink:0;background:var(--panel);border-left:1px solid var(--border);
+    display:flex;flex-direction:column;overflow-y:auto;
+  }
+
+  /* ===== MOBILE / NARROW SCREENS ===== */
+  @media (max-width: 860px){
+    header{gap:14px;padding:10px 12px;}
+    .symbol-block .pair{font-size:13px;}
+    #livePrice{font-size:20px;}
+    .stat .val{font-size:11.5px;}
+    .main{flex-direction:column;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+    .chart-wrap{flex:0 0 46vh;min-height:320px;width:100%;}
+    aside{width:100%;border-left:none;border-top:1px solid var(--border);overflow-y:visible;}
+    #wallCanvas{width:44px;}
+  }
+  .panel{border-bottom:1px solid var(--border);padding:14px 16px;}
+  .panel h3{font-size:11px;text-transform:uppercase;letter-spacing:0.8px;color:var(--muted);margin-bottom:10px;font-weight:700;}
+
+  .signal-card{background:var(--panel-2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;}
+  .signal-card .dir{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}
+  .signal-card .dir .tag{font-family:'JetBrains Mono',monospace;font-weight:700;font-size:12px;padding:3px 8px;border-radius:5px;}
+  .tag.buy{background:rgba(0,217,163,0.15);color:var(--buy);}
+  .tag.sell{background:rgba(255,92,92,0.15);color:var(--sell);}
+  .tag.reentry{background:rgba(255,176,32,0.15);color:var(--weak);}
+  .tag.breakout{background:rgba(176,132,255,0.18);color:var(--breakout);}
+  .signal-card .row{display:flex;justify-content:space-between;font-size:11.5px;color:var(--muted);padding:2px 0;}
+  .signal-card .row span.v{color:var(--text);font-family:'JetBrains Mono',monospace;font-weight:600;}
+  .empty{color:var(--muted);font-size:12px;font-style:italic;}
+
+  .wall-row{display:flex;align-items:center;gap:8px;font-size:11.5px;padding:4px 0;font-family:'JetBrains Mono',monospace;}
+  .wall-row .side{width:34px;font-weight:700;}
+  .wall-row.bid .side{color:var(--buy);}
+  .wall-row.ask .side{color:var(--sell);}
+  .wall-row .bar{height:6px;border-radius:3px;flex:1;background:var(--panel-2);position:relative;overflow:hidden;}
+  .wall-row .bar i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;}
+  .wall-row.bid .bar i{background:var(--buy);}
+  .wall-row.ask .bar i{background:var(--sell);}
+  .wall-row .qty{width:60px;text-align:right;color:var(--text);}
+
+  .sr-row{display:flex;justify-content:space-between;align-items:center;font-size:11.5px;padding:5px 0;font-family:'JetBrains Mono',monospace;border-bottom:1px dashed var(--border);}
+  .sr-row:last-child{border-bottom:none;}
+  .sr-row .badge{font-size:9.5px;padding:2px 6px;border-radius:4px;font-weight:700;letter-spacing:.4px;}
+  .badge.strong{background:rgba(124,140,255,0.15);color:var(--strong);}
+  .badge.weak{background:rgba(255,176,32,0.15);color:var(--weak);}
+
+  footer{
+    padding:7px 16px;font-size:10.5px;color:var(--muted);background:var(--panel-2);
+    border-top:1px solid var(--border);text-align:center;flex-shrink:0;
+  }
+  ::-webkit-scrollbar{width:6px;}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="symbol-block">
+    <div class="pair">XAUT<span style="color:var(--muted)">/USDT</span> <span style="color:var(--accent)">PERP</span></div>
+    <div class="sub">Binance Futures · Tether Gold</div>
+  </div>
+
+  <div class="price-block">
+    <div id="livePrice" class="mono">--</div>
+    <div id="priceChange" class="mono">--</div>
+  </div>
+
+  <div class="stat high"><span class="lbl">24h High</span><span class="val" id="statHigh">--</span></div>
+  <div class="stat low"><span class="lbl">24h Low</span><span class="val" id="statLow">--</span></div>
+  <div class="stat"><span class="lbl">24h Vol (XAUT)</span><span class="val" id="statVol">--</span></div>
+
+  <div class="intervals" id="intervals">
+    <button data-i="1m">1m</button>
+    <button data-i="5m">5m</button>
+    <button data-i="15m" class="active">15m</button>
+    <button data-i="1h">1h</button>
+    <button data-i="4h">4h</button>
+    <button data-i="1d">1D</button>
+    <button data-i="1w">1W</button>
+  </div>
+
+  <div class="status"><span class="dot" id="statusDot"></span><span id="statusText">Menyambung...</span></div>
+</header>
+
+<div class="main">
+  <div class="chart-wrap">
+    <div id="chart"></div>
+    <canvas id="wallCanvas"></canvas>
+    <div class="chart-legend">
+      <span><i style="background:#00D9A3"></i>Buy</span>
+      <span><i style="background:#FF5C5C"></i>Sell</span>
+      <span><i style="background:#FFB020"></i>Re-entry</span>
+      <span><i style="background:#B084FF"></i>Breakout</span>
+      <span><i style="background:#FFD166"></i>Pullback</span>
+      <span><i style="background:#4FC3F7"></i>Fibonacci</span>
+      <span><i style="background:#FFEA70"></i>★ Confluence</span>
+    </div>
+  </div>
+
+  <aside>
+    <div class="panel">
+      <h3>Signal Terkini</h3>
+      <div id="signalBox"><div class="empty">Menunggu setup pertama...</div></div>
+    </div>
+
+    <div class="panel">
+      <h3>Support &amp; Resistance</h3>
+      <div id="srBox"><div class="empty">Mengira level...</div></div>
+    </div>
+
+    <div class="panel">
+      <h3>Big Trader Walls (Order Book)</h3>
+      <div id="wallBox"><div class="empty">Memuat order book...</div></div>
+    </div>
+  </aside>
+</div>
+
+<footer>
+  Data langsung dari Binance Futures (XAUTUSDT). Support/Resistance, entry/re-entry, <b>breakout</b>, TP/SL dijana secara <b>algoritma heuristik</b> (pivot swing + ATR) — <b>bukan nasihat kewangan</b>. Sentiasa buat pengesahan sendiri sebelum trade.
+</footer>
+
+<script>
+/* ============================================================
+   CONFIG
+============================================================ */
+const SYMBOL = 'xautusdt';
+const REST_BASE = 'https://fapi.binance.com';
+const WS_BASE = 'wss://fstream.binance.com/stream?streams=';
+let interval = '15m';
+const HISTORY_LIMIT = 400;
+const SWING_LOOKBACK = 3;      // candles each side to confirm a swing point
+const SR_TOLERANCE_PCT = 0.0012; // cluster tolerance ~0.12%
+const MAX_SR_LEVELS = 6;
+const ATR_PERIOD = 14;
+
+/* ============================================================
+   CHART SETUP
+============================================================ */
+const chartEl = document.getElementById('chart');
+const chart = LightweightCharts.createChart(chartEl, {
+  layout:{ background:{ color:'transparent' }, textColor:'#8B96A5', fontFamily:'JetBrains Mono, monospace', fontSize:11 },
+  grid:{ vertLines:{ color:'#141C28' }, horzLines:{ color:'#141C28' } },
+  rightPriceScale:{ borderColor:'#1E2733' },
+  timeScale:{ borderColor:'#1E2733', timeVisible:true, secondsVisible:false },
+  crosshair:{ mode: LightweightCharts.CrosshairMode.Normal },
+});
+const candleSeries = chart.addCandlestickSeries({
+  upColor:'#00D9A3', downColor:'#FF5C5C', borderVisible:false,
+  wickUpColor:'#00D9A3', wickDownColor:'#FF5C5C',
+});
+
+function resizeChart(){ chart.resize(chartEl.clientWidth, chartEl.clientHeight); }
+window.addEventListener('resize', resizeChart);
+new ResizeObserver(resizeChart).observe(chartEl);
+
+/* ============================================================
+   STATE
+============================================================ */
+let candles = [];          // {time,open,high,low,close}
+let priceLines = [];       // active S/R + TP/SL price lines
+let ws = null;
+let reconnectDelay = 1000;
+let lastSignal = null;
+let bidBook = [], askBook = [];
+
+/* ============================================================
+   HELPERS
+============================================================ */
+const fmt = (n, d=2) => Number(n).toLocaleString('en-US',{minimumFractionDigits:d,maximumFractionDigits:d});
+
+function toSeconds(ms){ return Math.floor(ms/1000); }
+
+/* ============================================================
+   LOAD HISTORY (REST) + START STREAMS
+============================================================ */
+async function loadHistory(iv){
+  setStatus(false, 'Memuat data sejarah...');
+  const url = `${REST_BASE}/fapi/v1/klines?symbol=${SYMBOL.toUpperCase()}&interval=${iv}&limit=${HISTORY_LIMIT}`;
+  const res = await fetch(url);
+  const raw = await res.json();
+  candles = raw.map(k => ({
+    time: toSeconds(k[0]),
+    open: parseFloat(k[1]), high: parseFloat(k[2]),
+    low: parseFloat(k[3]), close: parseFloat(k[4]),
+  }));
+  candleSeries.setData(candles);
+  chart.timeScale().fitContent();
+  recomputeEverything();
+}
+
+function connectStreams(iv){
+  if (ws) { ws.onclose = null; ws.close(); }
+  const streams = [`${SYMBOL}@kline_${iv}`, `${SYMBOL}@depth20@500ms`, `${SYMBOL}@ticker`].join('/');
+  ws = new WebSocket(WS_BASE + streams);
+
+  ws.onopen = () => { setStatus(true, 'Live'); reconnectDelay = 1000; };
+  ws.onclose = () => {
+    setStatus(false, 'Terputus — menyambung semula...');
+    setTimeout(() => connectStreams(interval), reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 1.6, 15000);
+  };
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (msg) => {
+    const { stream, data } = JSON.parse(msg.data);
+    if (stream.endsWith('@kline_' + interval)) handleKline(data.k);
+    else if (stream.includes('@depth20')) handleDepth(data);
+    else if (stream.endsWith('@ticker')) handleTicker(data);
+  };
+}
+
+function setStatus(live, text){
+  document.getElementById('statusDot').classList.toggle('live', live);
+  document.getElementById('statusText').textContent = text;
+}
+
+/* ============================================================
+   KLINE STREAM
+============================================================ */
+function handleKline(k){
+  const c = {
+    time: toSeconds(k.t), open: parseFloat(k.o), high: parseFloat(k.h),
+    low: parseFloat(k.l), close: parseFloat(k.c),
+  };
+  const last = candles[candles.length - 1];
+  if (last && last.time === c.time){ candles[candles.length - 1] = c; }
+  else { candles.push(c); if (candles.length > HISTORY_LIMIT) candles.shift(); }
+  candleSeries.update(c);
+
+  document.getElementById('livePrice').textContent = fmt(c.close, 2);
+
+  if (k.x) recomputeEverything(); // only recompute S/R + signals on candle CLOSE (avoid noise)
+}
+
+/* ============================================================
+   TICKER STREAM (24h stats)
+============================================================ */
+function handleTicker(t){
+  const change = parseFloat(t.P);
+  const chEl = document.getElementById('priceChange');
+  chEl.textContent = (change >= 0 ? '+' : '') + change.toFixed(2) + '%';
+  chEl.style.background = change >= 0 ? 'rgba(0,217,163,0.15)' : 'rgba(255,92,92,0.15)';
+  chEl.style.color = change >= 0 ? 'var(--buy)' : 'var(--sell)';
+  document.getElementById('livePrice').style.color = change >= 0 ? 'var(--buy)' : 'var(--sell)';
+  document.getElementById('statHigh').textContent = fmt(t.h, 2);
+  document.getElementById('statLow').textContent = fmt(t.l, 2);
+  document.getElementById('statVol').textContent = Number(t.v).toLocaleString('en-US',{maximumFractionDigits:0});
+}
+
+/* ============================================================
+   DEPTH STREAM -> WHALE WALL DETECTION
+============================================================ */
+function handleDepth(d){
+  bidBook = d.b.map(([p,q]) => ({ price: parseFloat(p), qty: parseFloat(q) })).filter(x=>x.qty>0);
+  askBook = d.a.map(([p,q]) => ({ price: parseFloat(p), qty: parseFloat(q) })).filter(x=>x.qty>0);
+  renderWalls();
+  drawWallOverlay();
+}
+
+function detectWalls(book){
+  if (book.length < 4) return [];
+  const qtys = book.map(b=>b.qty);
+  const mean = qtys.reduce((a,b)=>a+b,0)/qtys.length;
+  const variance = qtys.reduce((a,b)=>a+(b-mean)**2,0)/qtys.length;
+  const sd = Math.sqrt(variance);
+  const threshold = mean + 1.5*sd;
+  return book.filter(b => b.qty >= threshold).sort((a,b)=>b.qty-a.qty).slice(0,5);
+}
+
+function renderWalls(){
+  const bidWalls = detectWalls(bidBook);
+  const askWalls = detectWalls(askBook);
+  const maxQty = Math.max(1, ...bidWalls.map(w=>w.qty), ...askWalls.map(w=>w.qty));
+  const box = document.getElementById('wallBox');
+  if (bidWalls.length === 0 && askWalls.length === 0){
+    box.innerHTML = '<div class="empty">Tiada wall ketara buat masa ini.</div>';
+    return;
+  }
+  let html = '';
+  askWalls.slice(0,4).reverse().forEach(w => {
+    html += `<div class="wall-row ask"><span class="side">ASK</span><div class="bar"><i style="width:${(w.qty/maxQty*100).toFixed(0)}%"></i></div><span class="qty">${fmt(w.price,1)}</span></div>`;
+  });
+  bidWalls.slice(0,4).forEach(w => {
+    html += `<div class="wall-row bid"><span class="side">BID</span><div class="bar"><i style="width:${(w.qty/maxQty*100).toFixed(0)}%"></i></div><span class="qty">${fmt(w.price,1)}</span></div>`;
+  });
+  box.innerHTML = html;
+}
+
+/* liquidity gutter — glowing bars at whale-wall price levels, aligned to chart's own price scale */
+const wallCanvas = document.getElementById('wallCanvas');
+const wctx = wallCanvas.getContext('2d');
+function sizeWallCanvas(){
+  wallCanvas.width = wallCanvas.clientWidth * devicePixelRatio;
+  wallCanvas.height = wallCanvas.clientHeight * devicePixelRatio;
+  wctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+}
+new ResizeObserver(sizeWallCanvas).observe(wallCanvas);
+sizeWallCanvas();
+
+function drawWallOverlay(){
+  const w = wallCanvas.clientWidth, h = wallCanvas.clientHeight;
+  wctx.clearRect(0,0,w,h);
+  const bidWalls = detectWalls(bidBook);
+  const askWalls = detectWalls(askBook);
+  const maxQty = Math.max(1, ...bidWalls.map(x=>x.qty), ...askWalls.map(x=>x.qty));
+
+  const draw = (list, color) => {
+    list.forEach(item => {
+      const y = candleSeries.priceToCoordinate(item.price);
+      if (y === null || y < 0 || y > h) return;
+      const barW = Math.max(6, (item.qty/maxQty) * (w-10));
+      wctx.fillStyle = color;
+      wctx.globalAlpha = 0.85;
+      wctx.fillRect(w-barW, y-2, barW, 4);
+      wctx.globalAlpha = 1;
+      wctx.shadowColor = color; wctx.shadowBlur = 6;
+      wctx.fillRect(w-barW, y-2, barW, 4);
+      wctx.shadowBlur = 0;
+    });
+  };
+  draw(bidWalls, '#00D9A3');
+  draw(askWalls, '#FF5C5C');
+}
+setInterval(drawWallOverlay, 400); // keep aligned while user scrolls/zooms chart
+
+/* ============================================================
+   SUPPORT / RESISTANCE — pivot swing detection + clustering
+============================================================ */
+function findSwingPoints(){
+  const highs = [], lows = [];
+  for (let i = SWING_LOOKBACK; i < candles.length - SWING_LOOKBACK; i++){
+    const c = candles[i];
+    let isHigh = true, isLow = true;
+    for (let j = i-SWING_LOOKBACK; j <= i+SWING_LOOKBACK; j++){
+      if (j === i) continue;
+      if (candles[j].high >= c.high) isHigh = false;
+      if (candles[j].low <= c.low) isLow = false;
+    }
+    if (isHigh) highs.push(c.high);
+    if (isLow) lows.push(c.low);
+  }
+  return { highs, lows };
+}
+
+function clusterLevels(points){
+  const sorted = [...points].sort((a,b)=>a-b);
+  const clusters = [];
+  sorted.forEach(p => {
+    const existing = clusters.find(c => Math.abs(c.avg - p)/p < SR_TOLERANCE_PCT);
+    if (existing){ existing.points.push(p); existing.avg = existing.points.reduce((a,b)=>a+b,0)/existing.points.length; }
+    else clusters.push({ avg: p, points:[p] });
+  });
+  return clusters.map(c => ({ price: c.avg, touches: c.points.length }));
+}
+
+let supportLevels = [], resistanceLevels = [];
+
+function computeSR(){
+  const { highs, lows } = findSwingPoints();
+  const resClusters = clusterLevels(highs).sort((a,b)=>b.touches-a.touches).slice(0,MAX_SR_LEVELS);
+  const supClusters = clusterLevels(lows).sort((a,b)=>b.touches-a.touches).slice(0,MAX_SR_LEVELS);
+  resistanceLevels = resClusters.map(c => ({...c, type:'resistance', strong: c.touches>=3}));
+  supportLevels = supClusters.map(c => ({...c, type:'support', strong: c.touches>=3}));
+}
+
+function renderSR(){
+  const all = [...resistanceLevels, ...supportLevels].sort((a,b)=>b.price-a.price);
+  const box = document.getElementById('srBox');
+  if (all.length === 0){ box.innerHTML = '<div class="empty">Data tidak mencukupi lagi.</div>'; return; }
+  box.innerHTML = all.map(l => `
+    <div class="sr-row">
+      <span style="color:${l.type==='resistance'?'var(--sell)':'var(--buy)'}">${l.type==='resistance'?'Resistance':'Support'}</span>
+      <span>${fmt(l.price,2)}</span>
+      <span class="badge ${l.strong?'strong':'weak'}">${l.strong?'KUAT':'LEMAH'} · ${l.touches}x</span>
+    </div>`).join('');
+}
+
+/* ============================================================
+   ATR (for SL/TP sizing)
+============================================================ */
+function computeATR(period=ATR_PERIOD){
+  if (candles.length < 3) return null;
+  const effPeriod = Math.min(period, candles.length - 1); // shrink to available history (e.g. weekly with few candles)
+  const trs = [];
+  for (let i = candles.length-effPeriod; i < candles.length; i++){
+    const c = candles[i], p = candles[i-1];
+    trs.push(Math.max(c.high-c.low, Math.abs(c.high-p.close), Math.abs(c.low-p.close)));
+  }
+  return trs.reduce((a,b)=>a+b,0)/trs.length;
+}
+
+/* ============================================================
+   ENTRY / RE-ENTRY / TP / SL SIGNAL ENGINE
+   Heuristic only: reaction off a clustered S/R level with a
+   confirming candle close. Re-entry = same level tested again
+   after price moved away, within a short window.
+============================================================ */
+let touchHistory = {}; // price-level-key -> last touch index, to detect re-entry
+
+function nearestLevel(levels, price){
+  let best = null, bestDist = Infinity;
+  levels.forEach(l => {
+    const dist = Math.abs(l.price - price)/price;
+    if (dist < bestDist){ bestDist = dist; best = l; }
+  });
+  return (best && bestDist < SR_TOLERANCE_PCT*2.5) ? best : null;
+}
+
+/* Breakout = candle closes decisively through a known S/R level
+   (beyond it by a fraction of ATR), after the previous candle was
+   still on the other side. Checked BEFORE reversal-entry logic,
+   since a confirmed breakout is the more decisive event. */
+const BREAKOUT_ATR_MULT = 0.15;
+let brokenLevels = {}; // remembers which level was last broken, to avoid re-firing every candle
+
+function computeBreakout(){
+  if (candles.length < 8) return null;
+  const atr = computeATR();
+  if (!atr) return null;
+  const last = candles[candles.length-1];
+  const prev = candles[candles.length-2];
+
+  for (const r of resistanceLevels){
+    const key = 'R_' + r.price.toFixed(1);
+    if (prev.close <= r.price && last.close > r.price + atr*BREAKOUT_ATR_MULT && brokenLevels[key] !== last.time){
+      brokenLevels[key] = last.time;
+      return {
+        dir:'BUY', kind:'BREAKOUT', entry:last.close,
+        sl: r.price - atr*0.5, tp: last.close + atr*3.2,
+        level:r, time:last.time,
+      };
+    }
+  }
+  for (const s of supportLevels){
+    const key = 'S_' + s.price.toFixed(1);
+    if (prev.close >= s.price && last.close < s.price - atr*BREAKOUT_ATR_MULT && brokenLevels[key] !== last.time){
+      brokenLevels[key] = last.time;
+      return {
+        dir:'SELL', kind:'BREAKOUT', entry:last.close,
+        sl: s.price + atr*0.5, tp: last.close - atr*3.2,
+        level:s, time:last.time,
+      };
+    }
+  }
+  return null;
+}
+
+function computeSignal(){
+  if (candles.length < 8) return null;
+  const atr = computeATR();
+  if (!atr) return null;
+  const last = candles[candles.length-1];
+  const prev = candles[candles.length-2];
+  const bullish = last.close > last.open;
+  const bearish = last.close < last.open;
+
+  // 1) Breakout takes priority over reversal-off-level entries
+  const breakout = computeBreakout();
+  if (breakout) return breakout;
+
+  const nearSupport = nearestLevel(supportLevels, last.low);
+  const nearResistance = nearestLevel(resistanceLevels, last.high);
+
+  let signal = null;
+
+  if (nearSupport && bullish && last.close > prev.close){
+    const key = 'S_' + nearSupport.price.toFixed(1);
+    const isReentry = touchHistory[key] !== undefined;
+    touchHistory[key] = candles.length;
+    signal = {
+      dir:'BUY', kind: isReentry ? 'REENTRY' : 'ENTRY',
+      entry: last.close,
+      sl: nearSupport.price - atr*0.6,
+      tp: nearResistance ? nearResistance.price : last.close + atr*3,
+      level: nearSupport, time: last.time,
+    };
+  } else if (nearResistance && bearish && last.close < prev.close){
+    const key = 'R_' + nearResistance.price.toFixed(1);
+    const isReentry = touchHistory[key] !== undefined;
+    touchHistory[key] = candles.length;
+    signal = {
+      dir:'SELL', kind: isReentry ? 'REENTRY' : 'ENTRY',
+      entry: last.close,
+      sl: nearResistance.price + atr*0.6,
+      tp: nearSupport ? nearSupport.price : last.close - atr*3,
+      level: nearResistance, time: last.time,
+    };
+  }
+  return signal;
+}
+
+function renderSignal(sig){
+  const box = document.getElementById('signalBox');
+  if (!sig){ box.innerHTML = '<div class="empty">Tiada setup jelas buat masa ini — harga jauh dari S/R.</div>'; return; }
+  const rr = Math.abs(sig.tp - sig.entry) / Math.abs(sig.entry - sig.sl);
+  const kindTagClass = sig.kind==='BREAKOUT' ? 'breakout' : sig.kind==='REENTRY' ? 'reentry' : 'reentry';
+  const kindOpacity = sig.kind==='ENTRY' ? 0.35 : 1;
+  const kindLabel = sig.kind==='BREAKOUT' ? (sig.dir==='BUY' ? 'BREAKOUT ↑' : 'BREAKOUT ↓') : sig.kind;
+  box.innerHTML = `
+    <div class="signal-card">
+      <div class="dir">
+        <span class="tag ${sig.dir==='BUY'?'buy':'sell'}">${sig.dir}</span>
+        <span class="tag ${kindTagClass}" style="opacity:${kindOpacity}">${kindLabel}</span>
+      </div>
+      <div class="row">Entry <span class="v">${fmt(sig.entry,2)}</span></div>
+      <div class="row">Take Profit <span class="v" style="color:var(--buy)">${fmt(sig.tp,2)}</span></div>
+      <div class="row">Stop Loss <span class="v" style="color:var(--sell)">${fmt(sig.sl,2)}</span></div>
+      <div class="row">R:R <span class="v">1 : ${rr.toFixed(2)}</span></div>
+      <div class="row">Level ${sig.kind==='BREAKOUT'?'Dipecahkan':'Rujukan'} <span class="v">${sig.level.strong?'KUAT':'LEMAH'} (${sig.level.touches}x) @ ${fmt(sig.level.price,2)}</span></div>
+    </div>`;
+}
+
+/* ============================================================
+   FIBONACCI RETRACEMENT — auto-drawn from the most recent
+   significant swing high/low within a lookback window.
+   Direction (uptrend vs downtrend) is inferred from which
+   extreme happened more recently.
+============================================================ */
+const FIB_LOOKBACK = 150;
+const FIB_RATIOS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+
+function computeFibLevels(){
+  if (candles.length < 5) return null;
+  const recent = candles.slice(-Math.min(FIB_LOOKBACK, candles.length));
+  let hi = recent[0], lo = recent[0], hiIdx = 0, loIdx = 0;
+  recent.forEach((c, i) => {
+    if (c.high > hi.high){ hi = c; hiIdx = i; }
+    if (c.low < lo.low){ lo = c; loIdx = i; }
+  });
+  if (hi.high === lo.low) return null;
+
+  const uptrend = hiIdx > loIdx; // swing high came after swing low = up-move, retracing down
+  const range = hi.high - lo.low;
+
+  const levels = FIB_RATIOS.map(r => ({
+    ratio: r,
+    price: uptrend ? (hi.high - r * range) : (lo.low + r * range),
+  }));
+  return { levels, uptrend, hiTime: hi.time, loTime: lo.time };
+}
+
+/* draw price lines (S/R + TP/SL + Fibonacci) — markers handled by renderAllMarkers() */
+const CONFLUENCE_TOLERANCE_PCT = 0.003; // 0.3% — fib level "close enough" to an S/R level to merge
+
+function renderPriceLines(sig){
+  priceLines.forEach(l => candleSeries.removePriceLine(l));
+  priceLines = [];
+
+  const srAll = [
+    ...resistanceLevels.map(l => ({ ...l, kind:'resistance' })),
+    ...supportLevels.map(l => ({ ...l, kind:'support' })),
+  ];
+  const fib = computeFibLevels();
+  const fibAll = fib ? fib.levels : [];
+
+  // --- find confluences: a fib level sitting close to an S/R level gets merged into one line ---
+  const usedSR = new Set();
+  const confluences = [];
+  const soloFib = [];
+  fibAll.forEach(f => {
+    let bestIdx = -1, bestDist = Infinity;
+    srAll.forEach((s, idx) => {
+      if (usedSR.has(idx)) return;
+      const dist = Math.abs(f.price - s.price) / s.price;
+      if (dist < CONFLUENCE_TOLERANCE_PCT && dist < bestDist){ bestDist = dist; bestIdx = idx; }
+    });
+    if (bestIdx >= 0){ usedSR.add(bestIdx); confluences.push({ fib:f, sr:srAll[bestIdx], price:(f.price+srAll[bestIdx].price)/2 }); }
+    else soloFib.push(f);
+  });
+  const soloSR = srAll.filter((s, idx) => !usedSR.has(idx));
+
+  // --- plain S/R lines (no fib nearby) ---
+  soloSR.forEach(l => {
+    const color = l.kind==='resistance' ? (l.strong?'#7C8CFF':'#FFB020') : (l.strong?'#00D9A3':'#FFB020');
+    priceLines.push(candleSeries.createPriceLine({
+      price: l.price, color,
+      lineWidth: l.strong ? 2 : 1, lineStyle: l.strong ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dashed,
+      axisLabelVisible:true, title: (l.kind==='resistance' ? (l.strong?'R-kuat':'R-lemah') : (l.strong?'S-kuat':'S-lemah')),
+    }));
+  });
+
+  // --- solo fib lines: only label the levels traders actually watch (38.2 / 50 / 61.8) plus the 0/100 edges; keep the rest as unlabeled thin lines to cut clutter ---
+  soloFib.forEach(l => {
+    const isEdge = l.ratio === 0 || l.ratio === 1;
+    const isGolden = l.ratio === 0.618;
+    const isMajor = isEdge || isGolden || l.ratio === 0.5 || l.ratio === 0.382;
+    priceLines.push(candleSeries.createPriceLine({
+      price: l.price,
+      color: isGolden ? '#FFD166' : '#4FC3F7',
+      lineWidth: isEdge ? 1 : (isGolden ? 2 : 1),
+      lineStyle: isEdge ? LightweightCharts.LineStyle.Solid : LightweightCharts.LineStyle.Dotted,
+      axisLabelVisible: isMajor,
+      title: isMajor ? ('Fib ' + (l.ratio * 100).toFixed(1) + '%') : '',
+    }));
+  });
+
+  // --- confluence lines: one merged, high-visibility line instead of two overlapping ones ---
+  confluences.forEach(c => {
+    const srLabel = c.sr.kind === 'resistance' ? (c.sr.strong ? 'R-kuat' : 'R-lemah') : (c.sr.strong ? 'S-kuat' : 'S-lemah');
+    priceLines.push(candleSeries.createPriceLine({
+      price: c.price,
+      color: '#FFEA70',
+      lineWidth: 3,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true,
+      title: `★ Fib ${(c.fib.ratio*100).toFixed(1)}% + ${srLabel}`,
+    }));
+  });
+
+  if (sig){
+    priceLines.push(candleSeries.createPriceLine({ price: sig.tp, color:'#00D9A3', lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted, title:'TP' }));
+    priceLines.push(candleSeries.createPriceLine({ price: sig.sl, color:'#FF5C5C', lineWidth:2, lineStyle:LightweightCharts.LineStyle.Dotted, title:'SL' }));
+  }
+}
+
+/* ============================================================
+   FULL-HISTORY MARKER SCAN
+   Walks every loaded candle (not just the latest) and plots every
+   BUY / SELL / RE-ENTRY / BREAKOUT / PULLBACK event so the chart
+   reads like a history of setups, not just the live one.
+   Uses the current (final) S/R levels for the whole scan — a
+   simplification, same heuristic basis as the live signal engine.
+============================================================ */
+const PULLBACK_WINDOW = 12;     // candles allowed for a retest after breakout
+const PULLBACK_TOL_PCT = 0.0015; // 0.15% proximity to count as a retest
+
+function scanAllMarkers(){
+  const atr = computeATR();
+  if (!atr || candles.length < 8) return [];
+
+  const markers = [];
+  const seenTouch = {};
+  const seenBreak = {};
+  const activeBreakouts = []; // {price, dir, idx}
+
+  for (let i = 1; i < candles.length; i++){
+    const last = candles[i], prev = candles[i-1];
+    const bullish = last.close > last.open;
+    const bearish = last.close < last.open;
+    let firedBreakout = false;
+
+    for (const r of resistanceLevels){
+      const key = 'R_' + r.price.toFixed(1);
+      if (prev.close <= r.price && last.close > r.price + atr*BREAKOUT_ATR_MULT && seenBreak[key] !== i){
+        seenBreak[key] = i;
+        markers.push({ time:last.time, position:'belowBar', color:'#B084FF', shape:'arrowUp', text:'BO', size:2 });
+        activeBreakouts.push({ price:r.price, dir:'BUY', idx:i });
+        firedBreakout = true;
+      }
+    }
+    for (const s of supportLevels){
+      const key = 'S_' + s.price.toFixed(1);
+      if (prev.close >= s.price && last.close < s.price - atr*BREAKOUT_ATR_MULT && seenBreak[key] !== i){
+        seenBreak[key] = i;
+        markers.push({ time:last.time, position:'aboveBar', color:'#B084FF', shape:'arrowDown', text:'BO', size:2 });
+        activeBreakouts.push({ price:s.price, dir:'SELL', idx:i });
+        firedBreakout = true;
+      }
+    }
+
+    // pullback = price retests a recently broken level and confirms continuation
+    for (let bi = activeBreakouts.length-1; bi >= 0; bi--){
+      const b = activeBreakouts[bi];
+      if (i - b.idx > PULLBACK_WINDOW){ activeBreakouts.splice(bi,1); continue; }
+      if (i === b.idx) continue;
+      const nearLevel = Math.abs(last.low - b.price)/b.price < PULLBACK_TOL_PCT || Math.abs(last.high - b.price)/b.price < PULLBACK_TOL_PCT;
+      if (!nearLevel) continue;
+      if (b.dir==='BUY' && bullish && last.close > b.price){
+        markers.push({ time:last.time, position:'belowBar', color:'#FFD166', shape:'circle', text:'PB' });
+        activeBreakouts.splice(bi,1);
+      } else if (b.dir==='SELL' && bearish && last.close < b.price){
+        markers.push({ time:last.time, position:'aboveBar', color:'#FFD166', shape:'circle', text:'PB' });
+        activeBreakouts.splice(bi,1);
+      }
+    }
+
+    if (firedBreakout) continue; // a breakout candle doesn't also count as a bounce entry
+
+    const nearSupport = nearestLevel(supportLevels, last.low);
+    const nearResistance = nearestLevel(resistanceLevels, last.high);
+
+    if (nearSupport && bullish && last.close > prev.close){
+      const key = 'S_' + nearSupport.price.toFixed(1);
+      const isReentry = seenTouch[key] !== undefined;
+      seenTouch[key] = i;
+      markers.push({ time:last.time, position:'belowBar', color: isReentry ? '#FFB020' : '#00D9A3', shape:'arrowUp', text: isReentry ? 'RE' : 'BUY' });
+    } else if (nearResistance && bearish && last.close < prev.close){
+      const key = 'R_' + nearResistance.price.toFixed(1);
+      const isReentry = seenTouch[key] !== undefined;
+      seenTouch[key] = i;
+      markers.push({ time:last.time, position:'aboveBar', color: isReentry ? '#FFB020' : '#FF5C5C', shape:'arrowDown', text: isReentry ? 'RE' : 'SELL' });
+    }
+  }
+
+  markers.sort((a,b) => a.time - b.time);
+  return markers;
+}
+
+function renderAllMarkers(){
+  candleSeries.setMarkers(scanAllMarkers());
+}
+
+/* ============================================================
+   MASTER RECOMPUTE
+============================================================ */
+function recomputeEverything(){
+  computeSR();
+  renderSR();
+  const sig = computeSignal();
+  lastSignal = sig;
+  renderSignal(sig);
+  renderPriceLines(sig);
+  renderAllMarkers();
+}
+
+/* ============================================================
+   INTERVAL SWITCHER
+============================================================ */
+document.getElementById('intervals').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  document.querySelectorAll('.intervals button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  interval = btn.dataset.i;
+  touchHistory = {};
+  brokenLevels = {};
+  loadHistory(interval).then(() => connectStreams(interval));
+});
+
+/* ============================================================
+   BOOT
+============================================================ */
+(async function boot(){
+  await loadHistory(interval);
+  connectStreams(interval);
+})();
+</script>
+</body>
+</html>
