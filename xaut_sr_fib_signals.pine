@@ -1,0 +1,676 @@
+//@version=6
+indicator("XAUT/USDT — S/R + Fibonacci + Signals", overlay=true, max_lines_count=200, max_labels_count=500)
+
+// ============================================================
+// INPUTS
+// ============================================================
+swingLookback   = input.int(3, "Swing Lookback (bar kiri/kanan)", minval=1, maxval=10, group="Support/Resistance")
+srTolerancePctIn= input.float(0.12, "Toleransi Cluster S/R (%)", minval=0.01, maxval=2.0, step=0.01, group="Support/Resistance")
+maxSRLevels     = input.int(6, "Max Level S/R Dipaparkan", minval=1, maxval=15, group="Support/Resistance")
+strongTouches   = input.int(3, "Bilangan Sentuhan = KUAT", minval=2, maxval=10, group="Support/Resistance")
+srCap           = input.int(60, "Max Cluster Disimpan (memori)", minval=10, maxval=200, group="Support/Resistance")
+
+atrPeriod       = input.int(14, "ATR Period", minval=2, group="ATR / TP-SL")
+breakoutAtrMult = input.float(0.15, "Breakout Threshold (x ATR)", minval=0.01, step=0.01, group="ATR / TP-SL")
+slAtrMult       = input.float(0.6, "SL Buffer (x ATR)", minval=0.1, step=0.1, group="ATR / TP-SL")
+tpAtrMult       = input.float(3.2, "TP Breakout Target (x ATR)", minval=0.5, step=0.1, group="ATR / TP-SL")
+
+fibLookback     = input.int(150, "Fibonacci Lookback (bar)", minval=10, group="Fibonacci")
+confluenceTolPctIn = input.float(0.3, "Toleransi Confluence Fib+S/R (%)", minval=0.01, step=0.01, group="Fibonacci")
+
+pullbackWindow  = input.int(12, "Pullback Window (bar)", minval=1, group="Breakout/Pullback")
+pullbackTolPctIn= input.float(0.15, "Toleransi Pullback (%)", minval=0.01, step=0.01, group="Breakout/Pullback")
+
+showSR   = input.bool(true, "Papar Support/Resistance", group="Paparan")
+showFib  = input.bool(true, "Papar Fibonacci", group="Paparan")
+showSig  = input.bool(true, "Papar Buy/Sell/Breakout/Pullback", group="Paparan")
+showTable= input.bool(true, "Papar Panel Signal Terkini", group="Paparan")
+
+showPatterns   = input.bool(true, "Papar Candlestick Patterns", group="Price Action")
+showStructure  = input.bool(true, "Papar Market Structure (HH/HL/LH/LL + BOS)", group="Price Action")
+dojiBodyPct    = input.float(10, "Doji: Body Max (% range)", minval=1, maxval=40, group="Price Action")
+pinWickMult    = input.float(2.0, "Pin Bar: Wick Min (x Body)", minval=1.2, maxval=5.0, group="Price Action")
+pinOppWickPct  = input.float(25, "Pin Bar: Wick Lawan Max (% range)", minval=5, maxval=50, group="Price Action")
+marubozuBodyPct= input.float(90, "Marubozu: Body Min (% range)", minval=60, maxval=99, group="Price Action")
+trendSmaLen    = input.int(20, "Trend Filter SMA Length", minval=5, maxval=100, group="Price Action")
+
+srTolerancePct     = srTolerancePctIn / 100.0
+confluenceTolPct   = confluenceTolPctIn / 100.0
+pullbackTolPct     = pullbackTolPctIn / 100.0
+
+// ============================================================
+// COLORS
+// ============================================================
+colBuy        = color.new(#00D9A3, 0)
+colSell       = color.new(#FF5C5C, 0)
+colStrong     = color.new(#7C8CFF, 0)
+colWeak       = color.new(#FFB020, 0)
+colBreakout   = color.new(#B084FF, 0)
+colPullback   = color.new(#FFD166, 0)
+colFib        = color.new(#4FC3F7, 0)
+colConfluence = color.new(#FFEA70, 0)
+colPanelBg    = color.new(#0F1620, 10)
+
+// ============================================================
+// ATR
+// ============================================================
+atrVal = ta.atr(atrPeriod)
+trendSma = ta.sma(close, trendSmaLen)
+
+// ============================================================
+// SWING PIVOT DETECTION + CLUSTERING INTO S/R LEVELS
+// ============================================================
+pivHigh = ta.pivothigh(high, swingLookback, swingLookback)
+pivLow  = ta.pivotlow(low, swingLookback, swingLookback)
+
+var array<float> resPrice        = array.new<float>()
+var array<int>   resTouch        = array.new<int>()
+var array<int>   resLastEntryBar = array.new<int>()
+var array<int>   resLastBreakBar = array.new<int>()
+
+var array<float> supPrice        = array.new<float>()
+var array<int>   supTouch        = array.new<int>()
+var array<int>   supLastEntryBar = array.new<int>()
+var array<int>   supLastBreakBar = array.new<int>()
+
+addOrClusterRes(p) =>
+    int n = array.size(resPrice)
+    int matchIdx = -1
+    if n > 0
+        for i = 0 to n - 1
+            float existing = array.get(resPrice, i)
+            if math.abs(existing - p) / p < srTolerancePct
+                matchIdx := i
+                break
+    if matchIdx >= 0
+        int t = array.get(resTouch, matchIdx) + 1
+        float oldP = array.get(resPrice, matchIdx)
+        float newAvg = (oldP * (t - 1) + p) / t
+        array.set(resPrice, matchIdx, newAvg)
+        array.set(resTouch, matchIdx, t)
+    else
+        array.push(resPrice, p)
+        array.push(resTouch, 1)
+        array.push(resLastEntryBar, -1)
+        array.push(resLastBreakBar, -1)
+
+addOrClusterSup(p) =>
+    int n = array.size(supPrice)
+    int matchIdx = -1
+    if n > 0
+        for i = 0 to n - 1
+            float existing = array.get(supPrice, i)
+            if math.abs(existing - p) / p < srTolerancePct
+                matchIdx := i
+                break
+    if matchIdx >= 0
+        int t = array.get(supTouch, matchIdx) + 1
+        float oldP = array.get(supPrice, matchIdx)
+        float newAvg = (oldP * (t - 1) + p) / t
+        array.set(supPrice, matchIdx, newAvg)
+        array.set(supTouch, matchIdx, t)
+    else
+        array.push(supPrice, p)
+        array.push(supTouch, 1)
+        array.push(supLastEntryBar, -1)
+        array.push(supLastBreakBar, -1)
+
+pruneRes(cap) =>
+    while array.size(resPrice) > cap
+        int minIdx = 0
+        int minVal = array.get(resTouch, 0)
+        for i = 1 to array.size(resTouch) - 1
+            if array.get(resTouch, i) < minVal
+                minVal := array.get(resTouch, i)
+                minIdx := i
+        array.remove(resPrice, minIdx)
+        array.remove(resTouch, minIdx)
+        array.remove(resLastEntryBar, minIdx)
+        array.remove(resLastBreakBar, minIdx)
+
+pruneSup(cap) =>
+    while array.size(supPrice) > cap
+        int minIdx = 0
+        int minVal = array.get(supTouch, 0)
+        for i = 1 to array.size(supTouch) - 1
+            if array.get(supTouch, i) < minVal
+                minVal := array.get(supTouch, i)
+                minIdx := i
+        array.remove(supPrice, minIdx)
+        array.remove(supTouch, minIdx)
+        array.remove(supLastEntryBar, minIdx)
+        array.remove(supLastBreakBar, minIdx)
+
+topKIndices(touchArr, k) =>
+    array<int> result = array.new<int>()
+    int n = array.size(touchArr)
+    array<bool> used = array.new<bool>(n, false)
+    int kk = math.min(k, n)
+    int kIter = 0
+    while kIter < kk
+        int bestIdx = -1
+        int bestVal = -1
+        int i = 0
+        while i < n
+            if not array.get(used, i) and array.get(touchArr, i) > bestVal
+                bestVal := array.get(touchArr, i)
+                bestIdx := i
+            i += 1
+        if bestIdx >= 0
+            array.push(result, bestIdx)
+            array.set(used, bestIdx, true)
+        kIter += 1
+    result
+
+// ============================================================
+// ACTIVE BREAKOUTS (for pullback detection)
+// ============================================================
+var array<float>  boPrice = array.new<float>()
+var array<string> boDir   = array.new<string>()   // "BUY" or "SELL"
+var array<int>    boBar   = array.new<int>()
+
+// ============================================================
+// PERSISTENT DRAWING OBJECT POOLS
+// ============================================================
+var array<line>  srLineArr  = array.new<line>()
+var array<label> srLabelArr = array.new<label>()
+var array<line>  fibLineArr = array.new<line>()
+var array<label> fibLabelArr= array.new<label>()
+var line  tpLine = na
+var line  slLine = na
+var label tpLabel = na
+var label slLabel = na
+
+clearLines(arr) =>
+    int i = 0
+    while i < array.size(arr)
+        line.delete(array.get(arr, i))
+        i += 1
+    array.clear(arr)
+
+clearLabels(arr) =>
+    int i = 0
+    while i < array.size(arr)
+        label.delete(array.get(arr, i))
+        i += 1
+    array.clear(arr)
+
+findTouchCount(priceArr, touchArr, price) =>
+    int result = 0
+    int j = 0
+    while j < array.size(priceArr)
+        if math.abs(array.get(priceArr, j) - price) / price < srTolerancePct
+            result := array.get(touchArr, j)
+        j += 1
+    result
+
+// ============================================================
+// SIGNAL PANEL STATE (mirrors the web dashboard's sidebar)
+// ============================================================
+var string sigDir   = ""
+var string sigKind  = ""
+var float  sigEntry = na
+var float  sigTP    = na
+var float  sigSL    = na
+var float  sigLevel = na
+var bool   sigStrong= false
+var int    sigTouch = 0
+var string sigStatus   = ""   // "", "ACTIVE", "TP_HIT", "SL_HIT"
+var int    sigStartBar = -1
+
+// ============================================================
+// MARKET STRUCTURE STATE (HH/HL/LH/LL + Break of Structure)
+// ============================================================
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+var float bosHighDoneAt = na
+var float bosLowDoneAt  = na
+
+var table sigTable = table.new(position.bottom_right, 2, 7, bgcolor=colPanelBg, border_width=1, border_color=color.new(#1E2733,0))
+
+// ============================================================
+// ONE-SHOT ALERT FLAGS — reset every bar (unlike sigDir/sigKind,
+// which stay "sticky" for the panel display). Without this,
+// alertcondition would keep firing on every bar after a signal
+// until the next one appears.
+// ============================================================
+bool fireBuyEntry  = false
+bool fireSellEntry = false
+bool fireReentry   = false
+bool fireBreakout  = false
+bool firePullback  = false
+bool fireBosUp     = false
+bool fireBosDown   = false
+
+// ============================================================
+// MAIN LOGIC — only recompute on confirmed (closed) bar,
+// same principle as the web dashboard (avoid intrabar repaint)
+// ============================================================
+if barstate.isconfirmed
+    // ---- 1) feed new pivots into the cluster arrays ----
+    if not na(pivHigh)
+        addOrClusterRes(pivHigh)
+        pruneRes(srCap)
+    if not na(pivLow)
+        addOrClusterSup(pivLow)
+        pruneSup(srCap)
+
+    // ---- 2) pick the strongest levels to actually use/display ----
+    array<int> resTop = topKIndices(resTouch, maxSRLevels)
+    array<int> supTop = topKIndices(supTouch, maxSRLevels)
+
+    // ---- 3) Fibonacci swing ----
+    float fibHigh = ta.highest(high, fibLookback)
+    float fibLow  = ta.lowest(low, fibLookback)
+    int barsAgoHigh = -ta.highestbars(high, fibLookback)
+    int barsAgoLow  = -ta.lowestbars(low, fibLookback)
+    bool fibUptrend = barsAgoHigh < barsAgoLow
+    float swingRange = fibHigh - fibLow
+
+    var array<float> fibRatios = array.from(0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0)
+    array<float> fibPrices = array.new<float>()
+    if swingRange > 0
+        for i = 0 to array.size(fibRatios) - 1
+            float r = array.get(fibRatios, i)
+            float p = fibUptrend ? fibHigh - r * swingRange : fibLow + r * swingRange
+            array.push(fibPrices, p)
+
+    // ---- 4) confluence matching (fib level <-> S/R level) ----
+    array<bool> resUsed = array.new<bool>(array.size(resTop), false)
+    array<bool> supUsed = array.new<bool>(array.size(supTop), false)
+    array<bool> fibUsed = array.new<bool>(array.size(fibPrices), false)
+
+    array<float>  confPrice = array.new<float>()
+    array<string> confLabel = array.new<string>()
+
+    if showFib and showSR
+        int fi = 0
+        while fi < array.size(fibPrices)
+            float fp = array.get(fibPrices, fi)
+            float ratio = array.get(fibRatios, fi)
+            int bestKind = -1   // 0 = resistance, 1 = support
+            int bestPos  = -1
+            float bestDist = 1e10
+            int ri = 0
+            while ri < array.size(resTop)
+                if not array.get(resUsed, ri)
+                    int idx = array.get(resTop, ri)
+                    float lvl = array.get(resPrice, idx)
+                    float dist = math.abs(fp - lvl) / lvl
+                    if dist < confluenceTolPct and dist < bestDist
+                        bestDist := dist
+                        bestKind := 0
+                        bestPos := ri
+                ri += 1
+            int si = 0
+            while si < array.size(supTop)
+                if not array.get(supUsed, si)
+                    int idx = array.get(supTop, si)
+                    float lvl = array.get(supPrice, idx)
+                    float dist = math.abs(fp - lvl) / lvl
+                    if dist < confluenceTolPct and dist < bestDist
+                        bestDist := dist
+                        bestKind := 1
+                        bestPos := si
+                si += 1
+            if bestKind == 0
+                array.set(resUsed, bestPos, true)
+                array.set(fibUsed, fi, true)
+                int idx = array.get(resTop, bestPos)
+                bool strong = array.get(resTouch, idx) >= strongTouches
+                float mergedPrice = (fp + array.get(resPrice, idx)) / 2
+                array.push(confPrice, mergedPrice)
+                array.push(confLabel, "★ Fib " + str.tostring(ratio*100, "#.0") + "% + " + (strong ? "R-kuat " : "R-lemah ") + str.tostring(mergedPrice, format.mintick))
+            else if bestKind == 1
+                array.set(supUsed, bestPos, true)
+                array.set(fibUsed, fi, true)
+                int idx = array.get(supTop, bestPos)
+                bool strong = array.get(supTouch, idx) >= strongTouches
+                float mergedPrice = (fp + array.get(supPrice, idx)) / 2
+                array.push(confPrice, mergedPrice)
+                array.push(confLabel, "★ Fib " + str.tostring(ratio*100, "#.0") + "% + " + (strong ? "S-kuat " : "S-lemah ") + str.tostring(mergedPrice, format.mintick))
+            fi += 1
+
+    // ---- 5) redraw S/R + Fibonacci + confluence lines ----
+    clearLines(srLineArr)
+    clearLabels(srLabelArr)
+    clearLines(fibLineArr)
+    clearLabels(fibLabelArr)
+
+    int xLeft  = bar_index - 80
+    int xRight = bar_index + 15
+
+    if showSR
+        int ri = 0
+        while ri < array.size(resTop)
+            if not array.get(resUsed, ri)
+                int idx = array.get(resTop, ri)
+                float lvl = array.get(resPrice, idx)
+                bool strong = array.get(resTouch, idx) >= strongTouches
+                color c = strong ? colStrong : colWeak
+                ln = line.new(xLeft, lvl, xRight, lvl, xloc.bar_index, extend.right, c, strong ? line.style_solid : line.style_dashed, strong ? 2 : 1)
+                lb = label.new(xRight, lvl, (strong ? "R-kuat " : "R-lemah ") + str.tostring(lvl, format.mintick), xloc.bar_index, yloc.price, c, label.style_label_left, color.black, size.small)
+                array.push(srLineArr, ln)
+                array.push(srLabelArr, lb)
+            ri += 1
+        int si = 0
+        while si < array.size(supTop)
+            if not array.get(supUsed, si)
+                int idx = array.get(supTop, si)
+                float lvl = array.get(supPrice, idx)
+                bool strong = array.get(supTouch, idx) >= strongTouches
+                color c = strong ? colBuy : colWeak
+                ln = line.new(xLeft, lvl, xRight, lvl, xloc.bar_index, extend.right, c, strong ? line.style_solid : line.style_dashed, strong ? 2 : 1)
+                lb = label.new(xRight, lvl, (strong ? "S-kuat " : "S-lemah ") + str.tostring(lvl, format.mintick), xloc.bar_index, yloc.price, c, label.style_label_left, color.black, size.small)
+                array.push(srLineArr, ln)
+                array.push(srLabelArr, lb)
+            si += 1
+
+    if showFib
+        int fi = 0
+        while fi < array.size(fibPrices)
+            if not array.get(fibUsed, fi)
+                float lvl = array.get(fibPrices, fi)
+                float ratio = array.get(fibRatios, fi)
+                bool isEdge = ratio == 0.0 or ratio == 1.0
+                bool isGolden = ratio == 0.618
+                bool isMajor = isEdge or isGolden or ratio == 0.5 or ratio == 0.382
+                color c = isGolden ? colPullback : colFib
+                ln = line.new(xLeft, lvl, xRight, lvl, xloc.bar_index, extend.right, c, isEdge ? line.style_solid : line.style_dotted, isGolden ? 2 : 1)
+                array.push(fibLineArr, ln)
+                if isMajor
+                    lb = label.new(xRight, lvl, "Fib " + str.tostring(ratio*100, "#.0") + "%", xloc.bar_index, yloc.price, c, label.style_label_left, color.black, size.small)
+                    array.push(fibLabelArr, lb)
+            fi += 1
+
+    if showFib and showSR
+        int ci = 0
+        while ci < array.size(confPrice)
+            float lvl = array.get(confPrice, ci)
+            ln = line.new(xLeft, lvl, xRight, lvl, xloc.bar_index, extend.right, colConfluence, line.style_solid, 3)
+            lb = label.new(xRight, lvl, array.get(confLabel, ci), xloc.bar_index, yloc.price, colConfluence, label.style_label_left, color.black, size.small)
+            array.push(fibLineArr, ln)
+            array.push(fibLabelArr, lb)
+            ci += 1
+
+    // ---- 6) BREAKOUT detection (checked before reversal entries) ----
+    bool firedBreakout = false
+    string boFireDir = ""
+    if not na(atrVal)
+        int ri = 0
+        while ri < array.size(resTop)
+            int idx = array.get(resTop, ri)
+            float lvl = array.get(resPrice, idx)
+            if close[1] <= lvl and close > lvl + atrVal * breakoutAtrMult and array.get(resLastBreakBar, idx) != bar_index
+                array.set(resLastBreakBar, idx, bar_index)
+                array.push(boPrice, lvl)
+                array.push(boDir, "BUY")
+                array.push(boBar, bar_index)
+                firedBreakout := true
+                boFireDir := "BUY"
+                fireBreakout := true
+                sigDir := "BUY"
+                sigKind := "BREAKOUT"
+                sigStatus := "ACTIVE"
+                sigStartBar := bar_index
+                sigEntry := close
+                sigSL := lvl - atrVal * slAtrMult
+                sigTP := close + atrVal * tpAtrMult
+                sigLevel := lvl
+                sigStrong := array.get(resTouch, idx) >= strongTouches
+                sigTouch := array.get(resTouch, idx)
+                if showSig
+                    label.new(bar_index, low, "BO\nBUY", xloc.bar_index, yloc.belowbar, colBreakout, label.style_label_up, color.white, size.small)
+            ri += 1
+        int si = 0
+        while si < array.size(supTop)
+            int idx = array.get(supTop, si)
+            float lvl = array.get(supPrice, idx)
+            if close[1] >= lvl and close < lvl - atrVal * breakoutAtrMult and array.get(supLastBreakBar, idx) != bar_index
+                array.set(supLastBreakBar, idx, bar_index)
+                array.push(boPrice, lvl)
+                array.push(boDir, "SELL")
+                array.push(boBar, bar_index)
+                firedBreakout := true
+                boFireDir := "SELL"
+                fireBreakout := true
+                sigDir := "SELL"
+                sigKind := "BREAKOUT"
+                sigStatus := "ACTIVE"
+                sigStartBar := bar_index
+                sigEntry := close
+                sigSL := lvl + atrVal * slAtrMult
+                sigTP := close - atrVal * tpAtrMult
+                sigLevel := lvl
+                sigStrong := array.get(supTouch, idx) >= strongTouches
+                sigTouch := array.get(supTouch, idx)
+                if showSig
+                    label.new(bar_index, high, "BO\nSELL", xloc.bar_index, yloc.abovebar, colBreakout, label.style_label_down, color.white, size.small)
+            si += 1
+
+    // ---- 7) PULLBACK detection (retest of a recently broken level) ----
+    if array.size(boBar) > 0
+        for bi = array.size(boBar) - 1 to 0
+            int startBar = array.get(boBar, bi)
+            if bar_index - startBar > pullbackWindow
+                array.remove(boPrice, bi)
+                array.remove(boDir, bi)
+                array.remove(boBar, bi)
+            else if bar_index > startBar
+                float lvl = array.get(boPrice, bi)
+                string dir = array.get(boDir, bi)
+                bool nearLevel = math.abs(low - lvl) / lvl < pullbackTolPct or math.abs(high - lvl) / lvl < pullbackTolPct
+                if nearLevel and dir == "BUY" and close > open and close > lvl and not na(atrVal)
+                    firePullback := true
+                    sigDir := "BUY"
+                    sigKind := "PULLBACK"
+                    sigStatus := "ACTIVE"
+                    sigStartBar := bar_index
+                    sigEntry := close
+                    sigSL := lvl - atrVal * slAtrMult
+                    sigTP := close + atrVal * tpAtrMult
+                    sigLevel := lvl
+                    sigTouch := findTouchCount(resPrice, resTouch, lvl)
+                    sigStrong := sigTouch >= strongTouches
+                    if showSig
+                        label.new(bar_index, low, "PB", xloc.bar_index, yloc.belowbar, colPullback, label.style_circle, color.black, size.small)
+                    array.remove(boPrice, bi)
+                    array.remove(boDir, bi)
+                    array.remove(boBar, bi)
+                else if nearLevel and dir == "SELL" and close < open and close < lvl and not na(atrVal)
+                    firePullback := true
+                    sigDir := "SELL"
+                    sigKind := "PULLBACK"
+                    sigStatus := "ACTIVE"
+                    sigStartBar := bar_index
+                    sigEntry := close
+                    sigSL := lvl + atrVal * slAtrMult
+                    sigTP := close - atrVal * tpAtrMult
+                    sigLevel := lvl
+                    sigTouch := findTouchCount(supPrice, supTouch, lvl)
+                    sigStrong := sigTouch >= strongTouches
+                    if showSig
+                        label.new(bar_index, high, "PB", xloc.bar_index, yloc.abovebar, colPullback, label.style_circle, color.black, size.small)
+                    array.remove(boPrice, bi)
+                    array.remove(boDir, bi)
+                    array.remove(boBar, bi)
+
+    // ---- 8) reversal ENTRY / RE-ENTRY (only if no breakout fired this bar) ----
+    if not firedBreakout and not na(atrVal)
+        int bestSupIdx = -1
+        float bestSupDist = 1e10
+        int si = 0
+        while si < array.size(supTop)
+            int idx = array.get(supTop, si)
+            float lvl = array.get(supPrice, idx)
+            float dist = math.abs(lvl - low) / low
+            if dist < srTolerancePct * 2.5 and dist < bestSupDist
+                bestSupDist := dist
+                bestSupIdx := idx
+            si += 1
+
+        int bestResIdx = -1
+        float bestResDist = 1e10
+        int ri = 0
+        while ri < array.size(resTop)
+            int idx = array.get(resTop, ri)
+            float lvl = array.get(resPrice, idx)
+            float dist = math.abs(lvl - high) / high
+            if dist < srTolerancePct * 2.5 and dist < bestResDist
+                bestResDist := dist
+                bestResIdx := idx
+            ri += 1
+
+        if bestSupIdx >= 0 and close > open and close > close[1]
+            bool isReentry = array.get(supLastEntryBar, bestSupIdx) != -1
+            array.set(supLastEntryBar, bestSupIdx, bar_index)
+            float lvl = array.get(supPrice, bestSupIdx)
+            sigDir := "BUY"
+            sigKind := isReentry ? "REENTRY" : "ENTRY"
+            sigStatus := "ACTIVE"
+            sigStartBar := bar_index
+            if isReentry
+                fireReentry := true
+            else
+                fireBuyEntry := true
+            sigEntry := close
+            sigSL := lvl - atrVal * slAtrMult
+            foundResTp = bestResIdx >= 0 ? array.get(resPrice, bestResIdx) : close + atrVal * 3
+            sigTP := foundResTp
+            sigLevel := lvl
+            sigStrong := array.get(supTouch, bestSupIdx) >= strongTouches
+            sigTouch := array.get(supTouch, bestSupIdx)
+            if showSig
+                label.new(bar_index, low, isReentry ? "RE" : "BUY", xloc.bar_index, yloc.belowbar, isReentry ? colWeak : colBuy, label.style_triangleup, color.white, size.small)
+        else if bestResIdx >= 0 and close < open and close < close[1]
+            bool isReentry = array.get(resLastEntryBar, bestResIdx) != -1
+            array.set(resLastEntryBar, bestResIdx, bar_index)
+            float lvl = array.get(resPrice, bestResIdx)
+            sigDir := "SELL"
+            sigKind := isReentry ? "REENTRY" : "ENTRY"
+            sigStatus := "ACTIVE"
+            sigStartBar := bar_index
+            if isReentry
+                fireReentry := true
+            else
+                fireSellEntry := true
+            sigEntry := close
+            sigSL := lvl + atrVal * slAtrMult
+            foundSupTp = bestSupIdx >= 0 ? array.get(supPrice, bestSupIdx) : close - atrVal * 3
+            sigTP := foundSupTp
+            sigLevel := lvl
+            sigStrong := array.get(resTouch, bestResIdx) >= strongTouches
+            sigTouch := array.get(resTouch, bestResIdx)
+            if showSig
+                label.new(bar_index, high, isReentry ? "RE" : "SELL", xloc.bar_index, yloc.abovebar, isReentry ? colWeak : colSell, label.style_triangledown, color.white, size.small)
+
+    // ---- 9) check whether the active signal's TP or SL has since been hit ----
+    if sigStatus == "ACTIVE" and sigDir != "" and bar_index > sigStartBar
+        if sigDir == "BUY"
+            if high >= sigTP
+                sigStatus := "TP_HIT"
+            else if low <= sigSL
+                sigStatus := "SL_HIT"
+        else if sigDir == "SELL"
+            if low <= sigTP
+                sigStatus := "TP_HIT"
+            else if high >= sigSL
+                sigStatus := "SL_HIT"
+
+    // ---- 10) TP / SL lines for the latest signal ----
+    bool isTamat = sigStatus == "TP_HIT" or sigStatus == "SL_HIT"
+    if not na(tpLine)
+        line.delete(tpLine)
+    if not na(slLine)
+        line.delete(slLine)
+    if not na(tpLabel)
+        label.delete(tpLabel)
+    if not na(slLabel)
+        label.delete(slLabel)
+    if not na(sigTP) and sigDir != ""
+        color tpColor = color.new(colBuy, isTamat ? 85 : 0)
+        color slColor = color.new(colSell, isTamat ? 85 : 0)
+        tpLine := line.new(xLeft, sigTP, xRight, sigTP, xloc.bar_index, extend.right, tpColor, line.style_dotted, 2)
+        tpLabel := label.new(xRight, sigTP, "TP " + str.tostring(sigTP, format.mintick) + (isTamat ? " (TAMAT)" : ""), xloc.bar_index, yloc.price, tpColor, label.style_label_left, color.black, size.small)
+        slLine := line.new(xLeft, sigSL, xRight, sigSL, xloc.bar_index, extend.right, slColor, line.style_dotted, 2)
+        slLabel := label.new(xRight, sigSL, "SL " + str.tostring(sigSL, format.mintick) + (isTamat ? " (TAMAT)" : ""), xloc.bar_index, yloc.price, slColor, label.style_label_left, color.black, size.small)
+
+    // ---- 11) signal panel table ----
+    if showTable
+        rr = (not na(sigTP) and not na(sigSL) and sigEntry != sigSL) ? math.abs(sigTP - sigEntry) / math.abs(sigEntry - sigSL) : na
+        table.cell(sigTable, 0, 0, "SIGNAL TERKINI", text_color=color.gray, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 1, 0, "", bgcolor=colPanelBg)
+        table.cell(sigTable, 0, 1, "Arah", text_color=color.gray, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 1, 1, sigDir + " (" + sigKind + ")", text_color=(sigDir=="BUY" ? colBuy : colSell), bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 0, 2, "Entry", text_color=color.gray, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 1, 2, str.tostring(sigEntry, format.mintick), text_color=color.white, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 0, 3, "TP", text_color=color.gray, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 1, 3, str.tostring(sigTP, format.mintick), text_color=colBuy, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 0, 4, "SL", text_color=color.gray, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 1, 4, str.tostring(sigSL, format.mintick), text_color=colSell, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 0, 5, "R:R", text_color=color.gray, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 1, 5, na(rr) ? "--" : "1 : " + str.tostring(rr, "#.##"), text_color=color.white, bgcolor=colPanelBg, text_size=size.small)
+        statusText = sigStatus == "TP_HIT" ? "✓ SUDAH TAMAT (TP)" : sigStatus == "SL_HIT" ? "✗ SUDAH TAMAT (SL)" : sigDir != "" ? "● AKTIF" : "--"
+        statusColor = sigStatus == "TP_HIT" ? colBuy : sigStatus == "SL_HIT" ? colSell : color.white
+        table.cell(sigTable, 0, 6, "Status", text_color=color.gray, bgcolor=colPanelBg, text_size=size.small)
+        table.cell(sigTable, 1, 6, statusText, text_color=statusColor, bgcolor=colPanelBg, text_size=size.small)
+
+    // ---- 12) MARKET STRUCTURE: HH/HL/LH/LL + Break of Structure ----
+    if showStructure
+        if not na(pivHigh)
+            if not na(lastSwingHigh)
+                string hTag = pivHigh > lastSwingHigh ? "HH" : "LH"
+                color hColor = pivHigh > lastSwingHigh ? colBuy : colSell
+                label.new(bar_index - swingLookback, pivHigh, hTag, xloc.bar_index, yloc.abovebar, hColor, label.style_label_down, color.white, size.tiny)
+            lastSwingHigh := pivHigh
+            bosHighDoneAt := na
+        if not na(pivLow)
+            if not na(lastSwingLow)
+                string lTag = pivLow > lastSwingLow ? "HL" : "LL"
+                color lColor = pivLow > lastSwingLow ? colBuy : colSell
+                label.new(bar_index - swingLookback, pivLow, lTag, xloc.bar_index, yloc.belowbar, lColor, label.style_label_up, color.white, size.tiny)
+            lastSwingLow := pivLow
+            bosLowDoneAt := na
+
+        if not na(lastSwingHigh) and close[1] <= lastSwingHigh and close > lastSwingHigh and lastSwingHigh != bosHighDoneAt
+            bosHighDoneAt := lastSwingHigh
+            fireBosUp := true
+            label.new(bar_index, high, "BOS ↑", xloc.bar_index, yloc.abovebar, colBreakout, label.style_label_down, color.white, size.small)
+        if not na(lastSwingLow) and close[1] >= lastSwingLow and close < lastSwingLow and lastSwingLow != bosLowDoneAt
+            bosLowDoneAt := lastSwingLow
+            fireBosDown := true
+            label.new(bar_index, low, "BOS ↓", xloc.bar_index, yloc.belowbar, colBreakout, label.style_label_up, color.white, size.small)
+
+    // ---- 13) CANDLESTICK PATTERNS (price action) ----
+    if showPatterns
+        float bodySz = math.abs(close - open)
+        float rangeSz = high - low
+        float upperWick = high - math.max(close, open)
+        float lowerWick = math.min(close, open) - low
+        bool isBull = close > open
+        bool isBear = close < open
+
+        if rangeSz > 0
+            if bodySz <= rangeSz * (dojiBodyPct / 100)
+                label.new(bar_index, high, "DOJI", xloc.bar_index, yloc.abovebar, color.gray, label.style_label_down, color.white, size.tiny)
+            if bodySz >= rangeSz * (marubozuBodyPct / 100)
+                label.new(bar_index, isBull ? low : high, "MARU", xloc.bar_index, isBull ? yloc.belowbar : yloc.abovebar, isBull ? colBuy : colSell, isBull ? label.style_label_up : label.style_label_down, color.white, size.tiny)
+            if bodySz > 0 and lowerWick >= bodySz * pinWickMult and upperWick <= rangeSz * (pinOppWickPct / 100) and close < trendSma
+                label.new(bar_index, low, "HAMMER", xloc.bar_index, yloc.belowbar, colBuy, label.style_label_up, color.white, size.tiny)
+            if bodySz > 0 and upperWick >= bodySz * pinWickMult and lowerWick <= rangeSz * (pinOppWickPct / 100) and close > trendSma
+                label.new(bar_index, high, "SHOOT", xloc.bar_index, yloc.abovebar, colSell, label.style_label_down, color.white, size.tiny)
+            if isBull and close[1] < open[1] and open <= close[1] and close >= open[1]
+                label.new(bar_index, low, "ENGULF", xloc.bar_index, yloc.belowbar, colBuy, label.style_label_up, color.white, size.tiny)
+            if isBear and close[1] > open[1] and open >= close[1] and close <= open[1]
+                label.new(bar_index, high, "ENGULF", xloc.bar_index, yloc.abovebar, colSell, label.style_label_down, color.white, size.tiny)
+
+// ============================================================
+// ALERTS — usable via TradingView's native "Create Alert" dialog
+// ============================================================
+alertcondition(fireBuyEntry, title="XAUT Buy Entry", message="XAUT: BUY entry di level support")
+alertcondition(fireSellEntry, title="XAUT Sell Entry", message="XAUT: SELL entry di level resistance")
+alertcondition(fireBreakout, title="XAUT Breakout", message="XAUT: Breakout dikesan")
+alertcondition(fireReentry, title="XAUT Re-entry", message="XAUT: Re-entry di level yang sama")
+alertcondition(firePullback, title="XAUT Pullback", message="XAUT: Pullback selepas breakout dikesan")
+alertcondition(fireBosUp, title="XAUT BOS Up", message="XAUT: Break of Structure ke atas")
+alertcondition(fireBosDown, title="XAUT BOS Down", message="XAUT: Break of Structure ke bawah")
